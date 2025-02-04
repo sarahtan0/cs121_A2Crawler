@@ -1,5 +1,6 @@
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+from bs4 import BeautifulSoup
 
 def scraper(url, resp):
     links = extract_next_links(url, resp)
@@ -15,7 +16,28 @@ def extract_next_links(url, resp):
     #         resp.raw_response.url: the url, again
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
-    return list()
+
+    # return empty if the response is not 200 or is None
+    if resp.status != 200 or resp.raw_response is None:
+        return []
+
+    soup = BeautifulSoup(resp.raw_response.content, "html.parser")
+
+    links = []
+    for a_tag in soup.find_all('a', href=True):
+        # connect all the relative urls found with the base url of the site
+        href = urljoin(url, a_tag['href'])
+
+        # remove fragments for normalizing
+        normalized_url = href.split('#')[0]
+
+        # only appends valid urls
+        if is_valid(normalized_url):
+            links.append(normalized_url)
+
+    return links
+
+    # return list()
 
 def is_valid(url):
     # Decide whether to crawl this url or not. 
@@ -25,7 +47,7 @@ def is_valid(url):
         parsed = urlparse(url)
         if parsed.scheme not in set(["http", "https"]):
             return False
-        return not re.match(
+        if re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
             + r"|png|tiff?|mid|mp2|mp3|mp4"
             + r"|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf"
@@ -33,7 +55,20 @@ def is_valid(url):
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
             + r"|epub|dll|cnf|tgz|sha1"
             + r"|thmx|mso|arff|rtf|jar|csv"
-            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
+            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower()):
+            return False
+        # specify the domains allowed as per the project
+        allowed_domains = (
+            "ics.uci.edu",
+            "cs.uci.edu",
+            "informatics.uci.edu",
+            "stat.uci.edu"
+        )
+         # verify that the domain is in the allowed domains
+        if not any(domain in parsed.netloc for domain in allowed_domains):
+            return False
+
+
 
     except TypeError:
         print ("TypeError for ", parsed)
