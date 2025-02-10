@@ -68,6 +68,21 @@ def is_valid(url):
         if not any(domain in parsed.netloc for domain in allowed_domains):
             return False
 
+        # do not crawl if there are too many query parameters (could be a sign of a trap)
+        if len(parsed.query.split('&')) > 5:
+            return False
+
+        # normalizes the path to lowercase and checks if it contains any url's that typically lead to traps or
+        # sites with minimal information
+        if re.search(r"(calendar|year|week|month|events|reply|share|download|attachment)", parsed.path.lower()):
+            return False
+
+        # checsk for links that commonly lead to pages with large files or pages that require admin access
+        if re.search(r"/wp-content|/upload|/cgi-bin|/admin|/trackback", parsed.path.lower()):
+            return False
+
+        return True
+
 
 
     except TypeError:
