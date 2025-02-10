@@ -152,7 +152,7 @@ def generate_report():
     print("\nLongest page:")
     print(f"URL: {longest_page['url']}, Word Count: {longest_page['word_count']}")
 
-    print("\nTop 50 most common words:"):
+    print("\nTop 50 most common words:")
     for word, count in word_counter.most_common(50):
         print(f"{word} -> {count}")
 
