@@ -110,6 +110,10 @@ def is_valid(url):
         if re.search(r"/wp-content|/upload|/cgi-bin|/admin|/trackback", parsed.path.lower()):
             return False
 
+        # detect git-related links that lead to low-info/traps
+        if re.search(r"(/-/commit|/-/tree|/-/blame|/-/compare|/-/tags|/-/branches|/-/raw|/-/blob|view=|format=atom)", parsed.path + parsed.query):
+            return False
+
         return True
 
 
