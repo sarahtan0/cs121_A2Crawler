@@ -4,9 +4,8 @@ from collections import Counter, defaultdict
 from bs4 import BeautifulSoup
 import atexit
 import hashlib
-import SimHash
+from simhash import Simhash
 
-# Stop words to filter out common words that are less informative
 stop_words = {
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "aren't", "as", "at", 
     "be", "because", "been", "before", "being", "below", "between", "both", "but", "by", "can't", "cannot", "could", 
@@ -24,51 +23,72 @@ stop_words = {
     "yourselves"
 }
 
-# Data structures for tracking URLs and content information
 unique_urls = set()
 word_counter = Counter()
 subdomain_counts = defaultdict(int)
 longest_page = {"url": None, "word_count": 0}
 simhashes = []
 
+current_page_url = None
+current_page_text = ""
+
 def scraper(url, resp):
-    # Crawl and parse the next set of valid links from the current page
+    """
+    Crawl and parse the next set of valid links from the current page.
+    
+    Before extracting outgoing links, this function sets global variables
+    for the current page’s URL and textual content.
+    """
+    global current_page_url, current_page_text
+    if resp.status != 200 or resp.raw_response is None:
+        return []
+    
+    soup = BeautifulSoup(resp.raw_response.content, "html.parser")
+    current_page_url = url
+    current_page_text = soup.get_text()
+    
     links = extract_next_links(url, resp)
     return [link for link in links if is_valid(link)]
 
 def extract_next_links(url, resp):
-    # Return the list of valid links found on the current page
     if resp.status != 200 or resp.raw_response is None:
         return []
-
+    
     soup = BeautifulSoup(resp.raw_response.content, "html.parser")
     links = []
-
-    # Extract all anchor tags and normalize URLs
+    
     for a_tag in soup.find_all('a', href=True):
         href = urljoin(url, a_tag['href'])
-        normalized_url = href.split('#')[0]  # Remove fragments
+        normalized_url = href.split('#')[0]  # Remove fragments.
         if is_valid(normalized_url):
             add_unique_url_and_track_content(normalized_url, soup)
             links.append(normalized_url)
-
+    
     return links
 
 def is_valid(url):
-    # Decide whether to crawl this URL or not based on various checks
+    """
+    Decide whether to crawl this URL or not based on various checks.
+    
+    In addition to the usual URL validations (scheme, file type, domain, etc.),
+    if the URL matches the current page (i.e. the page that was just fetched),
+    we compute its Simhash (using the simhash library) and check if it is a near-duplicate
+    of any previously seen page (using a Hamming distance threshold of 3). If it is, this
+    function returns False.
+    """
     try:
         parsed = urlparse(url)
-        if parsed.scheme not in set(["http", "https"]):
+        if parsed.scheme not in {"http", "https"}:
             return False
         if re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
-            + r"|png|tiff?|mid|mp2|mp3|mp4"
-            + r"|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf"
-            + r"|ps|eps|tex|ppt|pptx|doc|docx|xls|xlsx|names"
-            + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
-            + r"|epub|dll|cnf|tgz|sha1"
-            + r"|thmx|mso|arff|rtf|jar|csv"
-            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower()):
+            r"|png|tiff?|mid|mp2|mp3|mp4"
+            r"|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf"
+            r"|ps|eps|tex|ppt|pptx|doc|docx|xls|xlsx|names"
+            r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
+            r"|epub|dll|cnf|tgz|sha1"
+            r"|thmx|mso|arff|rtf|jar|csv"
+            r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower()):
             return False
         allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
         if not any(domain in parsed.netloc for domain in allowed_domains):
@@ -88,56 +108,40 @@ def is_valid(url):
         if re.search(r"(/-/commit|/-/tree|/-/blame|/-/compare|/-/tags|/-/branches|/-/raw|/-/blob|view=|format=atom)",
                      parsed.path + parsed.query):
             return False
+
+        # simhash check
+        global current_page_url, current_page_text
+        if current_page_url is not None and url == current_page_url:
+            # Compute Simhash using the simhash library.
+            # Tokenize the text, filtering out stop words.
+            tokens = re.findall(r"[a-zA-Z0-9']+", current_page_text.lower())
+            tokens = [token for token in tokens if token not in stop_words]
+            current_simhash = Simhash(tokens, f=16)
+            # If a near-duplicate exists, reject this page.
+            if is_near_duplicate(current_simhash):
+                return False
+            else:
+                simhashes.append(current_simhash)
+        
         return True
     except TypeError:
-        print("TypeError for ", parsed)
+        print("TypeError for", parsed)
         raise
 
-def calculate_simhash(text):
-
-    # Calculate a 16-bit SimHash for the given text
-    words = re.findall(r"[a-zA-Z0-9']+", text.lower())
-    bit_vector = [0] * 16
-
-    for word in words:
-        # Hash each word using MD5 and fold it down to 16 bits from 128
-        word_hash = int(hashlib.md5(word.encode()).hexdigest(), 16)
-        folded_hash = 0
-        for i in range(16):
-            folded_hash ^= (word_hash >> (i * 8)) & 0xFFFF
-
-        for i in range(16):
-            bit = (folded_hash >> i) & 1
-            if bit == 1:
-                bit_vector[i] += 1
-            else:
-                bit_vector[i] -= 1
-
-    # Generate the SimHash by setting bits based on the bit vector
-    simhash = 0
-    for i in range(16):
-        if bit_vector[i] > 0:
-            simhash |= (1 << i)
-    return simhash
-
-def distance(hash1, hash2):
-    # Calculate the distance between two SimHash values
-    x = hash1 ^ hash2
-    distance = 0
-    while x:
-        distance += x & 1
-        x >>= 1
-    return distance
-
-def is_near_duplicate(simhash, threshold=3):
-    # Check if the current SimHash is near-duplicate of previously seen pages
-    for existing_simhash in simhashes:
-        if distance(simhash, existing_simhash) <= threshold:
+def is_near_duplicate(simhash_obj):
+    """
+    Check if the given Simhash object is near-duplicate of any previously seen page.
+    (The library’s Simhash objects support a .distance() method.)
+    """
+    for existing in simhashes:
+        if simhash_obj.distance(existing) <= 3:
             return True
     return False
 
 def add_unique_url_and_track_content(url, soup):
-    # Track and store content-related statistics
+    """
+    Track and store content-related statistics for a URL.
+    """
     global longest_page
 
     normalized_url = url.split('#')[0]
@@ -152,15 +156,7 @@ def add_unique_url_and_track_content(url, soup):
         words = re.findall(r'\w+', text.lower())
         filtered_words = [word for word in words if word not in stop_words]
 
-        # Generate SimHash for current page content
-        simhash = calculate_simhash(" ".join(filtered_words))
-        if is_near_duplicate(simhash):
-            print(f"Skipping near-duplicate page: {url}")
-            return
-        else:
-            simhashes.append(simhash)
-
-        # Update word frequency and longest page statistics
+        # Update word frequency and longest page statistics.
         word_counter.update(filtered_words)
         word_count = len(filtered_words)
 
@@ -168,7 +164,9 @@ def add_unique_url_and_track_content(url, soup):
             longest_page = {"url": url, "word_count": word_count}
 
 def generate_report():
-    # Generate and print the final crawl report
+    """
+    Generate and print the final crawl report.
+    """
     print("\n--- Final Report ---")
     print("Number of unique pages:", len(unique_urls))
 
