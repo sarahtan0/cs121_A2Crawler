@@ -3,7 +3,9 @@ from urllib.parse import urlparse, urljoin
 from collections import Counter, defaultdict
 from bs4 import BeautifulSoup
 import atexit
+import hashlib
 
+# Stop words to filter out common words that are less informative
 stop_words = {
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "aren't", "as", "at", 
     "be", "because", "been", "before", "being", "below", "between", "both", "but", "by", "can't", "cannot", "could", 
@@ -21,42 +23,37 @@ stop_words = {
     "yourselves"
 }
 
+# Data structures for tracking URLs and content information
 unique_urls = set()
 word_counter = Counter()
 subdomain_counts = defaultdict(int)
 longest_page = {"url": None, "word_count": 0}
+simhashes = []
 
 def scraper(url, resp):
+    # Crawl and parse the next set of valid links from the current page
     links = extract_next_links(url, resp)
     return [link for link in links if is_valid(link)]
 
 def extract_next_links(url, resp):
-    # return empty if the response is not 200 or is None
+    # Return the list of valid links found on the current page
     if resp.status != 200 or resp.raw_response is None:
         return []
 
     soup = BeautifulSoup(resp.raw_response.content, "html.parser")
-
     links = []
+
+    # Extract all anchor tags and normalize URLs
     for a_tag in soup.find_all('a', href=True):
-        # connect all the relative urls found with the base url of the site
         href = urljoin(url, a_tag['href'])
-
-        # remove fragments for normalizing
-        normalized_url = href.split('#')[0]
-
-        # only appends valid urls
+        normalized_url = href.split('#')[0]  # Remove fragments
         if is_valid(normalized_url):
             links.append(normalized_url)
 
     return links
 
-    # return list()
-
 def is_valid(url):
-    # Decide whether to crawl this url or not. 
-    # If you decide to crawl it, return True; otherwise return False.
-    # There are already some conditions that return False.
+    # Decide whether to crawl this URL or not based on various checks
     try:
         parsed = urlparse(url)
         if parsed.scheme not in set(["http", "https"]):
@@ -71,63 +68,77 @@ def is_valid(url):
             + r"|thmx|mso|arff|rtf|jar|csv"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower()):
             return False
-        # specify the domains allowed as per the project
-        allowed_domains = (
-            "ics.uci.edu",
-            "cs.uci.edu",
-            "informatics.uci.edu",
-            "stat.uci.edu"
-        )
-
-
-         # verify that the domain is in the allowed domains
+        allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
         if not any(domain in parsed.netloc for domain in allowed_domains):
             return False
-
-        # do not crawl if there are too many query parameters (could be a sign of a trap)
         if len(parsed.query.split('&')) > 5:
             return False
-
-        #queries that look like traps
         if re.search(r"(tab_details|do=media|tab_files|do=diff|rev|version|difftype)", parsed.query):
             return False
-
-        #block certain urls in doku.php
         if 'doku.php' in parsed.path.lower() and re.search(r"(idx|do=|rev|difftype|media|edit|diff)", parsed.query):
             return False
-
-        #split path and filter out empty segments
-        path_segments = [segment for segment in parsed.path.split('/') if segment]
-        if len(path_segments) > 5:
+        if len([segment for segment in parsed.path.split('/') if segment]) > 5:
             return False
-
-        # normalizes the path to lowercase and checks if it contains any url's that typically lead to traps or
-        # sites with minimal information
         if re.search(r"(calendar|year|week|month|events|reply|share|download|attachment)", parsed.path.lower()):
             return False
-
-        # checsk for links that commonly lead to pages with large files or pages that require admin access
         if re.search(r"/wp-content|/upload|/cgi-bin|/admin|/trackback", parsed.path.lower()):
             return False
-
-        # detect git-related links that lead to low-info/traps
-        if re.search(r"(/-/commit|/-/tree|/-/blame|/-/compare|/-/tags|/-/branches|/-/raw|/-/blob|view=|format=atom)", parsed.path + parsed.query):
+        if re.search(r"(/-/commit|/-/tree|/-/blame|/-/compare|/-/tags|/-/branches|/-/raw|/-/blob|view=|format=atom)",
+                     parsed.path + parsed.query):
             return False
-
         return True
-
-
-
     except TypeError:
-        print ("TypeError for ", parsed)
+        print("TypeError for ", parsed)
         raise
 
+def calculate_simhash(text):
+    # Calculate a 16-bit SimHash for the given text
+    words = re.findall(r'\w+', text.lower())
+    bit_vector = [0] * 16
+
+    for word in words:
+        # Hash each word using MD5 and fold it down to 16 bits
+        word_hash = int(hashlib.md5(word.encode()).hexdigest(), 16)
+        folded_hash = 0
+        for i in range(16):
+            folded_hash ^= (word_hash >> (i * 8)) & 0xFFFF
+
+        for i in range(16):
+            bit = (folded_hash >> i) & 1
+            if bit == 1:
+                bit_vector[i] += 1
+            else:
+                bit_vector[i] -= 1
+
+    # Generate the SimHash by setting bits based on the bit vector
+    simhash = 0
+    for i in range(16):
+        if bit_vector[i] > 0:
+            simhash |= (1 << i)
+    return simhash
+
+def hamming_distance(hash1, hash2):
+    # Calculate the Hamming distance between two SimHash values
+    x = hash1 ^ hash2
+    distance = 0
+    while x:
+        distance += x & 1
+        x >>= 1
+    return distance
+
+def is_near_duplicate(simhash, threshold=3):
+    # Check if the current SimHash is near-duplicate of previously seen pages
+    for existing_simhash in simhashes:
+        if hamming_distance(simhash, existing_simhash) <= threshold:
+            return True
+    return False
+
 def add_unique_url_and_track_content(url, soup):
+    # Track and store content-related statistics
     global longest_page
 
-    # remove fragment
     normalized_url = url.split('#')[0]
-    if normalized_url not in unique.urls:
+    if normalized_url not in unique_urls:
         unique_urls.add(normalized_url)
 
         parsed = urlparse(url)
@@ -138,14 +149,23 @@ def add_unique_url_and_track_content(url, soup):
         words = re.findall(r'\w+', text.lower())
         filtered_words = [word for word in words if word not in stop_words]
 
-        #adds one to each word in word_counter
-        word_counter.update(filtered_words)
+        # Generate SimHash for current page content
+        simhash = calculate_simhash(" ".join(filtered_words))
+        if is_near_duplicate(simhash):
+            print(f"Skipping near-duplicate page: {url}")
+            return
+        else:
+            simhashes.append(simhash)
 
+        # Update word frequency and longest page statistics
+        word_counter.update(filtered_words)
         word_count = len(filtered_words)
+
         if word_count > longest_page["word_count"]:
             longest_page = {"url": url, "word_count": word_count}
 
 def generate_report():
+    # Generate and print the final crawl report
     print("\n--- Final Report ---")
     print("Number of unique pages:", len(unique_urls))
 
