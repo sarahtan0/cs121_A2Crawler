@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from bs4 import BeautifulSoup
 import atexit
 import hashlib
+import SimHash
 
 # Stop words to filter out common words that are less informative
 stop_words = {
@@ -48,6 +49,7 @@ def extract_next_links(url, resp):
         href = urljoin(url, a_tag['href'])
         normalized_url = href.split('#')[0]  # Remove fragments
         if is_valid(normalized_url):
+            add_unique_url_and_track_content(normalized_url, soup)
             links.append(normalized_url)
 
     return links
@@ -79,7 +81,7 @@ def is_valid(url):
             return False
         if len([segment for segment in parsed.path.split('/') if segment]) > 5:
             return False
-        if re.search(r"(calendar|year|week|month|events|reply|share|download|attachment)", parsed.path.lower()):
+        if re.search(r"(/calendar/|/year/|/week/|/month/|/events/|/reply/|/share/|/download/|/attachment/)", parsed.path.lower()):
             return False
         if re.search(r"/wp-content|/upload|/cgi-bin|/admin|/trackback", parsed.path.lower()):
             return False
@@ -92,12 +94,13 @@ def is_valid(url):
         raise
 
 def calculate_simhash(text):
+
     # Calculate a 16-bit SimHash for the given text
-    words = re.findall(r'\w+', text.lower())
+    words = re.findall(r"[a-zA-Z0-9']+", text.lower())
     bit_vector = [0] * 16
 
     for word in words:
-        # Hash each word using MD5 and fold it down to 16 bits
+        # Hash each word using MD5 and fold it down to 16 bits from 128
         word_hash = int(hashlib.md5(word.encode()).hexdigest(), 16)
         folded_hash = 0
         for i in range(16):
@@ -117,8 +120,8 @@ def calculate_simhash(text):
             simhash |= (1 << i)
     return simhash
 
-def hamming_distance(hash1, hash2):
-    # Calculate the Hamming distance between two SimHash values
+def distance(hash1, hash2):
+    # Calculate the distance between two SimHash values
     x = hash1 ^ hash2
     distance = 0
     while x:
@@ -129,7 +132,7 @@ def hamming_distance(hash1, hash2):
 def is_near_duplicate(simhash, threshold=3):
     # Check if the current SimHash is near-duplicate of previously seen pages
     for existing_simhash in simhashes:
-        if hamming_distance(simhash, existing_simhash) <= threshold:
+        if distance(simhash, existing_simhash) <= threshold:
             return True
     return False
 
