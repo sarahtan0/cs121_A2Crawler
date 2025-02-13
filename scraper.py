@@ -53,15 +53,19 @@ def scraper(url, resp):
     total_pages_crawled += 1
 
     # Check if the content is unreasonably large using the Content-Length header if available.
-    content_length = resp.raw_response.headers.get("Content-Length")
-    if content_length is not None and int(content_length) > MAX_CONTENT_LENGTH:
-        print(f"Skipping {url} because content length {content_length} bytes exceeds max allowed size.")
+    try:
+        content_length = resp.raw_response.headers.get("Content-Length")
+        if content_length is not None and int(content_length) > MAX_CONTENT_LENGTH:
+            print(f"Skipping {url} because content length {content_length} bytes exceeds max allowed size.")
+            return []
+        # Alternatively, if no Content-Length header is provided, check the actual size of the content.
+        if len(resp.raw_response.content) > MAX_CONTENT_LENGTH:
+            print(f"Skipping {url} because content size {len(resp.raw_response.content)} bytes exceeds max allowed size.")
+            return []
+    except:
+        print("Invalid page content size, skipping")
         return []
-    # Alternatively, if no Content-Length header is provided, check the actual size of the content.
-    if len(resp.raw_response.content) > MAX_CONTENT_LENGTH:
-        print(f"Skipping {url} because content size {len(resp.raw_response.content)} bytes exceeds max allowed size.")
-        return []
-    
+        
     # Parse the page content.
     soup = BeautifulSoup(resp.raw_response.content, "html.parser")
     text = soup.get_text()
@@ -153,7 +157,7 @@ def is_near_duplicate(simhash_obj):
     A threshold of 3 (or less) is considered near-duplicate.
     """
     for existing in simhashes:
-        if simhash_obj.distance(existing) <= 13:
+        if simhash_obj.distance(existing) <= 12:
             return True
     return False
 
