@@ -69,7 +69,7 @@ def scraper(url, resp):
     # Compute simhash for the current page immediately after download.
     tokens = re.findall(r"[a-zA-Z0-9']+", text.lower())
     tokens = [token for token in tokens if token not in stop_words]
-    current_simhash = Simhash(tokens, f=32)
+    current_simhash = Simhash(tokens, f=64)
     
     # If a near-duplicate exists, do not add its outgoing links to the frontier.
     if is_near_duplicate(current_simhash):
@@ -150,7 +150,7 @@ def is_near_duplicate(simhash_obj):
     A threshold of 3 (or less) is considered near-duplicate.
     """
     for existing in simhashes:
-        if simhash_obj.distance(existing) <= 6:
+        if simhash_obj.distance(existing) <= 13:
             return True
     return False
 
