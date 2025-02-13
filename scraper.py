@@ -71,7 +71,7 @@ def scraper(url, resp):
     text = soup.get_text()
     
     # Compute simhash for the current page immediately after download.
-    tokens = re.findall(r"[a-zA-Z0-9']{2,}", text.lower())
+    tokens = re.findall(r"[a-zA-Z']{2,}", text.lower())
     tokens = [token for token in tokens if token not in stop_words]
     current_simhash = Simhash(tokens, f=64)
     
