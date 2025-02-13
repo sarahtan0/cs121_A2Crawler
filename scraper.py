@@ -6,6 +6,9 @@ import atexit
 import hashlib
 from simhash import Simhash
 
+# Define the maximum allowed content length (in bytes) for a page.
+MAX_CONTENT_LENGTH = 1 * 1024 * 1024  # 1MB
+
 stop_words = {
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "aren't", "as", "at", 
     "be", "because", "been", "before", "being", "below", "between", "both", "but", "by", "can't", "cannot", "could", 
@@ -14,7 +17,7 @@ stop_words = {
     "her", "here", "here's", "hers", "herself", "him", "himself", "his", "how", "how's", "i", "i'd", "i'll", "i'm", 
     "i've", "if", "in", "into", "is", "isn't", "it", "it's", "its", "itself", "let's", "me", "more", "most", "mustn't", 
     "my", "myself", "no", "nor", "not", "of", "off", "on", "once", "only", "or", "other", "ought", "our", "ours", 
-    "ourselves", "out", "over", "own", "same", "shan't", "she", "she'd", "she'll", "she's", "should", "shouldn't", 
+    "ourselves", "out", "over", "own", "s", "same", "shan't", "she", "she'd", "she'll", "she's", "should", "shouldn't", 
     "so", "some", "such", "than", "that", "that's", "the", "their", "theirs", "them", "themselves", "then", "there", 
     "there's", "these", "they", "they'd", "they'll", "they're", "they've", "this", "those", "through", "to", "too", 
     "under", "until", "up", "very", "was", "wasn't", "we", "we'd", "we'll", "we're", "we've", "were", "weren't", 
@@ -29,6 +32,9 @@ subdomain_counts = defaultdict(int)
 longest_page = {"url": None, "word_count": 0}
 simhashes = []
 
+# Global counter for every page that the crawler sees (downloaded).
+total_pages_crawled = 0
+
 current_page_url = None
 current_page_text = ""
 
@@ -39,13 +45,41 @@ def scraper(url, resp):
     Before extracting outgoing links, this function sets global variables
     for the current page’s URL and textual content.
     """
-    global current_page_url, current_page_text
+    global current_page_url, current_page_text, total_pages_crawled
     if resp.status != 200 or resp.raw_response is None:
         return []
     
+    # Increment total_pages_crawled as soon as a page is received.
+    total_pages_crawled += 1
+
+    # Check if the content is unreasonably large using the Content-Length header if available.
+    content_length = resp.raw_response.headers.get("Content-Length")
+    if content_length is not None and int(content_length) > MAX_CONTENT_LENGTH:
+        print(f"Skipping {url} because content length {content_length} bytes exceeds max allowed size.")
+        return []
+    # Alternatively, if no Content-Length header is provided, check the actual size of the content.
+    if len(resp.raw_response.content) > MAX_CONTENT_LENGTH:
+        print(f"Skipping {url} because content size {len(resp.raw_response.content)} bytes exceeds max allowed size.")
+        return []
+    
+    # Parse the page content.
     soup = BeautifulSoup(resp.raw_response.content, "html.parser")
+    text = soup.get_text()
+    
+    # Compute simhash for the current page immediately after download.
+    tokens = re.findall(r"[a-zA-Z0-9']+", text.lower())
+    tokens = [token for token in tokens if token not in stop_words]
+    current_simhash = Simhash(tokens, f=16)
+    
+    # If a near-duplicate exists, do not add its outgoing links to the frontier.
+    if is_near_duplicate(current_simhash):
+        print(f"Skipping adding links from {url} because its simhash is too similar to a previously seen page.")
+        return []
+    else:
+        simhashes.append(current_simhash)
+    
     current_page_url = url
-    current_page_text = soup.get_text()
+    current_page_text = text
     
     links = extract_next_links(url, resp)
     return [link for link in links if is_valid(link)]
@@ -93,36 +127,13 @@ def is_valid(url):
         allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
         if not any(domain in parsed.netloc for domain in allowed_domains):
             return False
-        if len(parsed.query.split('&')) > 5:
-            return False
-        if re.search(r"(tab_details|do=media|tab_files|do=diff|rev|version|difftype)", parsed.query):
-            return False
-        if 'doku.php' in parsed.path.lower() and re.search(r"(idx|do=|rev|difftype|media|edit|diff)", parsed.query):
-            return False
-        if len([segment for segment in parsed.path.split('/') if segment]) > 5:
-            return False
-        if re.search(r"(/calendar/|/year/|/week/|/month/|/events/|/reply/|/share/|/download/|/attachment/)", parsed.path.lower()):
-            return False
-        if re.search(r"/wp-content|/upload|/cgi-bin|/admin|/trackback", parsed.path.lower()):
-            return False
-        if re.search(r"(/-/commit|/-/tree|/-/blame|/-/compare|/-/tags|/-/branches|/-/raw|/-/blob|view=|format=atom)",
-                     parsed.path + parsed.query):
+
+        # Exclude links that contain words implying calendars or dates (e.g., "calendar", "date", "year", etc.).
+        # This check now inspects both the path and query.
+        combined = parsed.path.lower() + " " + parsed.query.lower()
+        if re.search(r"(calendar|date|year|month|day|week|event|seminar|redirect)", combined):
             return False
 
-        # simhash check
-        global current_page_url, current_page_text
-        if current_page_url is not None and url == current_page_url:
-            # Compute Simhash using the simhash library.
-            # Tokenize the text, filtering out stop words.
-            tokens = re.findall(r"[a-zA-Z0-9']+", current_page_text.lower())
-            tokens = [token for token in tokens if token not in stop_words]
-            current_simhash = Simhash(tokens, f=16)
-            # If a near-duplicate exists, reject this page.
-            if is_near_duplicate(current_simhash):
-                return False
-            else:
-                simhashes.append(current_simhash)
-        
         return True
     except TypeError:
         print("TypeError for", parsed)
@@ -132,6 +143,8 @@ def is_near_duplicate(simhash_obj):
     """
     Check if the given Simhash object is near-duplicate of any previously seen page.
     (The library’s Simhash objects support a .distance() method.)
+    
+    A threshold of 3 (or less) is considered near-duplicate.
     """
     for existing in simhashes:
         if simhash_obj.distance(existing) <= 3:
@@ -141,9 +154,10 @@ def is_near_duplicate(simhash_obj):
 def add_unique_url_and_track_content(url, soup):
     """
     Track and store content-related statistics for a URL.
+    
+    This function is called when a URL is added to the frontier.
     """
     global longest_page
-
     normalized_url = url.split('#')[0]
     if normalized_url not in unique_urls:
         unique_urls.add(normalized_url)
@@ -168,6 +182,7 @@ def generate_report():
     Generate and print the final crawl report.
     """
     print("\n--- Final Report ---")
+    print("Total pages crawled:", total_pages_crawled)
     print("Number of unique pages:", len(unique_urls))
 
     print("\nLongest page:")
