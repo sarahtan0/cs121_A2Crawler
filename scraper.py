@@ -141,9 +141,9 @@ def is_valid(url):
             return False
 
         return True
-    except TypeError:
-        print("TypeError for", parsed)
-        raise
+    except:
+        print("Invalid url, skipping url: ", url)
+        return False
 
 def is_near_duplicate(simhash_obj):
     """
