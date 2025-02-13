@@ -137,6 +137,9 @@ def is_valid(url):
         if parsed.path.count('/') >= 6:
             return False
 
+        if parsed.path.count('=') >= 4:
+            return False
+
         return True
     except TypeError:
         print("TypeError for", parsed)
