@@ -131,7 +131,10 @@ def is_valid(url):
         # Exclude links that contain words implying calendars or dates (e.g., "calendar", "date", "year", etc.).
         # This check now inspects both the path and query.
         combined = parsed.path.lower() + " " + parsed.query.lower()
-        if re.search(r"(calendar|date|year|month|day|week|event|seminar|redirect)", combined):
+        if re.search(r"(calendar|date|year|month|day|week|event|seminar|redirect|filter)", combined):
+            return False
+
+        if parsed.path.count('/') >= 6:
             return False
 
         return True
