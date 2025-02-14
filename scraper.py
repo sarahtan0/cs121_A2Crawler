@@ -71,7 +71,7 @@ def scraper(url, resp):
     text = soup.get_text()
     
     # Compute simhash for the current page immediately after download.
-    tokens = re.findall(r"[a-zA-Z']{2,}", text.lower())
+    tokens = re.findall(r"[a-zA-Z]{2,}", text.lower())
     tokens = [token for token in tokens if token not in stop_words]
     current_simhash = Simhash(tokens, f=64)
     
@@ -177,7 +177,7 @@ def add_unique_url_and_track_content(url, soup):
             subdomain_counts[parsed.netloc] += 1
 
         text = soup.get_text()
-        words = re.findall(r'\w+', text.lower())
+        words = re.findall(r"[a-zA-Z]{2,}", text.lower())
         filtered_words = [word for word in words if word not in stop_words]
 
         # Update word frequency and longest page statistics.
