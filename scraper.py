@@ -7,7 +7,7 @@ import hashlib
 from simhash import Simhash
 
 # Sets a maximum page size in bytes (multiplication for ease of calculation).
-MAX_CONTENT_LENGTH = 2 * 1024 * 1024  # 1MB
+MAX_CONTENT_LENGTH = 2 * 1024 * 1024  # 2MB
 
 # Set of stop words, found in the project description. Added an additional "s" to remove the s from words like "it's"
 stop_words = {
@@ -27,7 +27,7 @@ stop_words = {
     "yourselves"
 }
 
-# Defined global variables that need to be tracked for the report/personal debugging
+# Global variables for tracking statistics
 unique_urls = set()
 word_counter = Counter()
 subdomain_counts = defaultdict(int)
@@ -39,57 +39,57 @@ current_page_text = ""
 
 def scraper(url, resp):
     """
-    Crawls the current page and performs a variety of checks before decided if it should extract all the links from said page.
+    Processes the current page, but only if its URL contains one of the allowed domains.
     """
-
-    # Sets global variables and checks the page response
+    # Check if the URL string contains one of the allowed domains/subdomains.
+    allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
+    if not any(domain in url for domain in allowed_domains):
+        print(f"Skipping {url} because it is not in an allowed domain.")
+        return []
+    
     global current_page_url, current_page_text, total_pages_crawled
     if resp.status != 200 or resp.raw_response is None:
         return []
     
-    # Increment total_pages_crawled as soon as this page registers as successful
     total_pages_crawled += 1
 
-    # Checks the page content size using the content header or manually checking size, errors if th
+    # Check the page size before processing
     try:
         content_length = resp.raw_response.headers.get("Content-Length")
         if content_length is not None and int(content_length) > MAX_CONTENT_LENGTH:
-            print(f"Skipping {url} because content length {content_length} bytes exceeds pre-determined maximum size.")
+            print(f"Skipping {url} because content length {content_length} bytes exceeds maximum size.")
             return []
         if len(resp.raw_response.content) > MAX_CONTENT_LENGTH:
-            print(f"Skipping {url} because content size {len(resp.raw_response.content)} bytes exceeds pre-determined maximum size.")
+            print(f"Skipping {url} because content size {len(resp.raw_response.content)} bytes exceeds maximum size.")
             return []
     except:
         print("Invalid page content size, skipping")
         return []
         
-    # Parse the page content w/ BeautifulSoup.
+    # Parse content and compute text
     soup = BeautifulSoup(resp.raw_response.content, "html.parser")
     text = soup.get_text()
     
-    # Calc simhash for the current page.
+    # Calculate simhash for duplication
     tokens = re.findall(r"[a-zA-Z]{2,}", text.lower())
     tokens = [token for token in tokens if token not in stop_words]
     current_simhash = Simhash(tokens, f=64)
     
-    # If the simhash matches one already in the set, do not add this page's links to the frontier.
     if is_near_duplicate(current_simhash):
         print(f"Skipping adding links from {url} because its simhash is too similar to a previously seen page.")
         return []
     else:
         simhashes.append(current_simhash)
     
-    # update globals
     current_page_url = url
     current_page_text = text
     
-    # extract and return links
     links = extract_next_links(url, resp)
     return [link for link in links if is_valid(link)]
 
 def extract_next_links(url, resp):
     """
-    Given a link, extract all the links found on that page, but perform some simple uniqueness and validity checks
+    Extracts and normalizes links from the page while checking for allowed domains.
     """
     if resp.status != 200 or resp.raw_response is None:
         return []
@@ -97,7 +97,6 @@ def extract_next_links(url, resp):
     soup = BeautifulSoup(resp.raw_response.content, "html.parser")
     links = []
     
-    # loop through all links in the page and normalize them before testing for uniqueness/adding to the return list
     for a_tag in soup.find_all('a', href=True):
         href = urljoin(url, a_tag['href'])
         normalized_url = href.split('#')[0]  # Remove fragments.
@@ -109,13 +108,20 @@ def extract_next_links(url, resp):
 
 def is_valid(url):
     """
-    Collection of tests that help determine whether a link is valid and should be crawled or not.
+    Returns True only if the URL is from one of the allowed domains and passes several other checks.
     """
+    # check if the URL string contains an allowed domain.
+    allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
+    if not any(domain in url for domain in allowed_domains):
+        return False
+    
     try:
         parsed = urlparse(url)
-        # False if not http or https scheme
+        # Ensure the scheme is either http or https.
         if parsed.scheme not in {"http", "https"}:
             return False
+        
+        # Filter out URLs ending with unwanted file extensions.
         if re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
             r"|png|tiff?|mid|mp2|mp3|mp4"
@@ -126,45 +132,35 @@ def is_valid(url):
             r"|thmx|mso|arff|rtf|jar|csv"
             r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower()):
             return False
-        # False if the parsed domain does not contain any of the following
-        allowed_domains = ("ics.uci.edu", "cs.uci.edu", "informatics.uci.edu", "stat.uci.edu")
-        if not any(domain in parsed.netloc for domain in allowed_domains):
-            return False
-
-        # Checks both the path and the query for words that would allude to dates or calendars.
-        # In addition, terms like redirect and/or filter commonly led to excessive traps
+        
+        # Exclude URLs with certain keywords in their path or query.
         combined = parsed.path.lower() + " " + parsed.query.lower()
         if re.search(r"(calendar|date|year|month|day|week|event|seminar|redirect|filter)", combined):
             return False
 
-        # Return false on pages with excessively long paths (usually led to low-information pages)
+        # Exclude URLs with excessively long paths or too many '=' signs.
         if parsed.path.count('/') >= 6:
             return False
-
-        # Return false on pages with exceessive "=" signs in the path, usually led to invalid/restricted/repetitive pages
         if parsed.path.count('=') >= 4:
             return False
 
-        # If no conditions hit, link is valid and return true
         return True
-    except:
-        print("Invalid url, skipping url: ", url)
+    except Exception as e:
+        print("Invalid url, skipping url:", url, "Error:", e)
         return False
 
 def is_near_duplicate(simhash_obj):
     """
-    Check if the simhash is a near duplicate to the already existing simhashes.
+    Checks whether the given simhash is too similar to any already seen.
     """
     for existing in simhashes:
-        # returns true if the difference between existing hashes is too low.
-        # found on google search for reasonable hamming distances for 64 bit hashes and used values on the high end
         if simhash_obj.distance(existing) <= 8:
             return True
     return False
 
 def add_unique_url_and_track_content(url, soup):
     """
-    Tracks the urls that get added to the frontier and determines their uniqueness for the report stats
+    Adds a URL to the set of unique URLs and updates word frequency and longest page stats.
     """
     global longest_page
     normalized_url = url.split('#')[0]
@@ -179,7 +175,6 @@ def add_unique_url_and_track_content(url, soup):
         words = re.findall(r"[a-zA-Z]{2,}", text.lower())
         filtered_words = [word for word in words if word not in stop_words]
 
-        # Update word frequency and longest page statistics.
         word_counter.update(filtered_words)
         word_count = len(filtered_words)
 
@@ -188,7 +183,7 @@ def add_unique_url_and_track_content(url, soup):
 
 def generate_report():
     """
-    Generate and print the final crawl report based on the global variables.
+    Prints the final crawl report.
     """
     print("\n--- Final Report ---")
     print("Total pages crawled:", total_pages_crawled)
@@ -205,5 +200,5 @@ def generate_report():
     for subdomain, count in sorted(subdomain_counts.items()):
         print(f"{subdomain}, {count}")
 
-# atexit module is used to generate the report when the program terminates
+# report generation on exit.
 atexit.register(generate_report)
