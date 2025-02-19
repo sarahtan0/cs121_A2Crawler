@@ -1,2 +1,5 @@
-cbor
-requests
+beautifulsoup4==4.13.3
+cbor==1.0.0
+Requests==2.32.3
+simhash==2.1.2
+spacetime==2.1.1
